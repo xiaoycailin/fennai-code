@@ -49,6 +49,9 @@ concurrency:
   group: ${{ github.workflow }}
   cancel-in-progress: true
 
+env:
+  WINDOWS_ONLY_RELEASE: "true"
+
 jobs:
   tag-check:
     runs-on: ubuntu-latest
@@ -132,7 +135,7 @@ jobs:
           echo "::endgroup::"
 
   build:
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.release_mode != 'promote_signed' }}
+    if: ${{ (github.event_name != 'workflow_dispatch' || inputs.release_mode != 'promote_signed') && env.WINDOWS_ONLY_RELEASE != 'true' }}
     needs: tag-check
     name: Build - ${{ matrix.runner }} - ${{ matrix.target }} - ${{ matrix.bundle }}
     runs-on: ${{ matrix.runs_on || matrix.runner }}
@@ -625,7 +628,7 @@ jobs:
             codex-rs/dist/${{ matrix.target }}/*
 
   stage-signed-macos:
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.release_mode == 'promote_signed' }}
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.release_mode == 'promote_signed' && env.WINDOWS_ONLY_RELEASE != 'true' }}
     needs: tag-check
     name: Stage signed macOS handoff - ${{ matrix.target }} - ${{ matrix.bundle }}
     runs-on: macos-15
@@ -858,7 +861,7 @@ jobs:
     secrets: inherit
 
   argument-comment-lint-release-assets:
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.release_mode != 'promote_signed' }}
+    if: ${{ (github.event_name != 'workflow_dispatch' || inputs.release_mode != 'promote_signed') && env.WINDOWS_ONLY_RELEASE != 'true' }}
     name: argument-comment-lint release assets
     needs: tag-check
     uses: ./.github/workflows/rust-release-argument-comment-lint.yml
@@ -866,7 +869,7 @@ jobs:
       publish: true
 
   zsh-release-assets:
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.release_mode != 'promote_signed' }}
+    if: ${{ (github.event_name != 'workflow_dispatch' || inputs.release_mode != 'promote_signed') && env.WINDOWS_ONLY_RELEASE != 'true' }}
     name: zsh release assets
     needs: tag-check
     uses: ./.github/workflows/rust-release-zsh.yml
@@ -895,11 +898,20 @@ jobs:
           ) ||
           (
             (github.event_name != 'workflow_dispatch' || inputs.release_mode != 'promote_signed') &&
-            needs.build.result == 'success' &&
+            (
+              (env.WINDOWS_ONLY_RELEASE == 'true' && needs.build.result == 'skipped') ||
+              (env.WINDOWS_ONLY_RELEASE != 'true' && needs.build.result == 'success')
+            ) &&
             needs.stage-signed-macos.result == 'skipped' &&
             needs.build-windows.result == 'success' &&
-            needs.argument-comment-lint-release-assets.result == 'success' &&
-            needs.zsh-release-assets.result == 'success'
+            (
+              (env.WINDOWS_ONLY_RELEASE == 'true' &&
+                needs.argument-comment-lint-release-assets.result == 'skipped' &&
+                needs.zsh-release-assets.result == 'skipped') ||
+              (env.WINDOWS_ONLY_RELEASE != 'true' &&
+                needs.argument-comment-lint-release-assets.result == 'success' &&
+                needs.zsh-release-assets.result == 'success')
+            )
           )
         )
       }}
