@@ -181,8 +181,30 @@ jobs:
             ls -lh "target/${{ matrix.target }}/release/${binary}.exe"
           done
 
+      - name: Check Azure Trusted Signing secrets
+        id: azure-signing
+        shell: bash
+        env:
+          AZURE_TRUSTED_SIGNING_CLIENT_ID: ${{ secrets.AZURE_TRUSTED_SIGNING_CLIENT_ID }}
+          AZURE_TRUSTED_SIGNING_TENANT_ID: ${{ secrets.AZURE_TRUSTED_SIGNING_TENANT_ID }}
+          AZURE_TRUSTED_SIGNING_SUBSCRIPTION_ID: ${{ secrets.AZURE_TRUSTED_SIGNING_SUBSCRIPTION_ID }}
+          AZURE_TRUSTED_SIGNING_ENDPOINT: ${{ secrets.AZURE_TRUSTED_SIGNING_ENDPOINT }}
+          AZURE_TRUSTED_SIGNING_ACCOUNT_NAME: ${{ secrets.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME }}
+          AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME: ${{ secrets.AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME }}
+        run: |
+          if [[ -n "${AZURE_TRUSTED_SIGNING_CLIENT_ID}" \
+            && -n "${AZURE_TRUSTED_SIGNING_TENANT_ID}" \
+            && -n "${AZURE_TRUSTED_SIGNING_SUBSCRIPTION_ID}" \
+            && -n "${AZURE_TRUSTED_SIGNING_ENDPOINT}" \
+            && -n "${AZURE_TRUSTED_SIGNING_ACCOUNT_NAME}" \
+            && -n "${AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME}" ]]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Sign Windows binaries with Azure Trusted Signing
-        if: ${{ secrets.AZURE_TRUSTED_SIGNING_CLIENT_ID != '' && secrets.AZURE_TRUSTED_SIGNING_TENANT_ID != '' && secrets.AZURE_TRUSTED_SIGNING_SUBSCRIPTION_ID != '' && secrets.AZURE_TRUSTED_SIGNING_ENDPOINT != '' && secrets.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME != '' && secrets.AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME != '' }}
+        if: ${{ steps.azure-signing.outputs.enabled == 'true' }}
         uses: ./.github/actions/windows-code-sign
         with:
           target: ${{ matrix.target }}
@@ -195,7 +217,7 @@ jobs:
           certificate-profile-name: ${{ secrets.AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME }}
 
       - name: Skip signing (Azure Trusted Signing secrets not configured)
-        if: ${{ !(secrets.AZURE_TRUSTED_SIGNING_CLIENT_ID != '' && secrets.AZURE_TRUSTED_SIGNING_TENANT_ID != '' && secrets.AZURE_TRUSTED_SIGNING_SUBSCRIPTION_ID != '' && secrets.AZURE_TRUSTED_SIGNING_ENDPOINT != '' && secrets.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME != '' && secrets.AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME != '') }}
+        if: ${{ steps.azure-signing.outputs.enabled != 'true' }}
         shell: bash
         run: echo "Skipping Windows code signing because Azure Trusted Signing secrets are not configured."
 
