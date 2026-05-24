@@ -252,6 +252,189 @@ jobs:
             throw "Failed to build tray binary"
           }
 
+      - name: Build Windows installer and uninstaller executables
+        shell: powershell
+        run: |
+          $target = "${{ matrix.target }}"
+          $distDir = Join-Path $env:GITHUB_WORKSPACE "codex-rs\dist\$target"
+          $workDir = Join-Path $env:RUNNER_TEMP "fcode-installer-$target"
+          $null = New-Item -ItemType Directory -Path $workDir -Force
+
+          $installScript = @'
+          $ErrorActionPreference = "Stop"
+
+          function Add-UserPathEntry([string]$pathEntry) {
+            $pathValue = [Environment]::GetEnvironmentVariable("Path", "User")
+            if ([string]::IsNullOrWhiteSpace($pathValue)) {
+              [Environment]::SetEnvironmentVariable("Path", $pathEntry, "User")
+              return
+            }
+            $entries = $pathValue.Split(';', [System.StringSplitOptions]::RemoveEmptyEntries) | ForEach-Object { $_.Trim() }
+            if ($entries -notcontains $pathEntry) {
+              [Environment]::SetEnvironmentVariable("Path", ($pathValue.TrimEnd(';') + ";" + $pathEntry), "User")
+            }
+          }
+
+          $installRoot = Join-Path $env:LOCALAPPDATA "FCode"
+          $binDir = Join-Path $installRoot "bin"
+          $null = New-Item -ItemType Directory -Path $binDir -Force
+
+          Copy-Item -LiteralPath (Join-Path $PSScriptRoot "codex-__TARGET__.exe") -Destination (Join-Path $binDir "fcode.exe") -Force
+          Copy-Item -LiteralPath (Join-Path $PSScriptRoot "codex-app-server-__TARGET__.exe") -Destination (Join-Path $binDir "codex-app-server.exe") -Force
+          Copy-Item -LiteralPath (Join-Path $PSScriptRoot "codex-command-runner-__TARGET__.exe") -Destination (Join-Path $binDir "codex-command-runner.exe") -Force
+          Copy-Item -LiteralPath (Join-Path $PSScriptRoot "codex-responses-api-proxy-__TARGET__.exe") -Destination (Join-Path $binDir "codex-responses-api-proxy.exe") -Force
+          Copy-Item -LiteralPath (Join-Path $PSScriptRoot "codex-windows-sandbox-setup-__TARGET__.exe") -Destination (Join-Path $binDir "codex-windows-sandbox-setup.exe") -Force
+          Copy-Item -LiteralPath (Join-Path $PSScriptRoot "fcode-tray-__TARGET__.exe") -Destination (Join-Path $binDir "fcode-tray.exe") -Force
+
+          $uninstallScript = @'
+          $ErrorActionPreference = "Stop"
+          $installRoot = Join-Path $env:LOCALAPPDATA "FCode"
+          $binDir = Join-Path $installRoot "bin"
+
+          $pathValue = [Environment]::GetEnvironmentVariable("Path", "User")
+          if (-not [string]::IsNullOrWhiteSpace($pathValue)) {
+            $entries = $pathValue.Split(';', [System.StringSplitOptions]::RemoveEmptyEntries) | ForEach-Object { $_.Trim() }
+            $newEntries = $entries | Where-Object { $_ -and ($_ -ne $binDir) }
+            [Environment]::SetEnvironmentVariable("Path", ($newEntries -join ';'), "User")
+          }
+
+          if (Test-Path -LiteralPath $installRoot) {
+            Remove-Item -LiteralPath $installRoot -Recurse -Force
+          }
+
+          Write-Output "FCode uninstalled from $installRoot"
+          '@
+          Set-Content -LiteralPath (Join-Path $binDir "uninstall-fcode.ps1") -Value $uninstallScript -Encoding UTF8
+
+          Add-UserPathEntry -pathEntry $binDir
+
+          Write-Output "Installed FCode at $installRoot"
+          Write-Output "Open new terminal, then run: fcode --version"
+          '@
+          $installScript = $installScript.Replace("__TARGET__", $target)
+          Set-Content -LiteralPath (Join-Path $workDir "install.ps1") -Value $installScript -Encoding UTF8
+
+          Copy-Item -LiteralPath (Join-Path $distDir "codex-$target.exe") -Destination (Join-Path $workDir "codex-$target.exe") -Force
+          Copy-Item -LiteralPath (Join-Path $distDir "codex-app-server-$target.exe") -Destination (Join-Path $workDir "codex-app-server-$target.exe") -Force
+          Copy-Item -LiteralPath (Join-Path $distDir "codex-command-runner-$target.exe") -Destination (Join-Path $workDir "codex-command-runner-$target.exe") -Force
+          Copy-Item -LiteralPath (Join-Path $distDir "codex-responses-api-proxy-$target.exe") -Destination (Join-Path $workDir "codex-responses-api-proxy-$target.exe") -Force
+          Copy-Item -LiteralPath (Join-Path $distDir "codex-windows-sandbox-setup-$target.exe") -Destination (Join-Path $workDir "codex-windows-sandbox-setup-$target.exe") -Force
+          Copy-Item -LiteralPath (Join-Path $distDir "fcode-tray-$target.exe") -Destination (Join-Path $workDir "fcode-tray-$target.exe") -Force
+
+          $installerSed = Join-Path $workDir "fcode-installer.sed"
+          $installerExe = Join-Path $distDir "fcode-installer-$target.exe"
+          $installerSedContent = @"
+[Version]
+Class=IEXPRESS
+SEDVersion=3
+[Options]
+PackagePurpose=InstallApp
+ShowInstallProgramWindow=0
+HideExtractAnimation=1
+UseLongFileName=1
+InsideCompressed=0
+CAB_FixedSize=0
+CAB_ResvCodeSigning=0
+RebootMode=N
+InstallPrompt=
+DisplayLicense=
+FinishMessage=
+TargetName=$installerExe
+FriendlyName=FCode Installer ($target)
+AppLaunched=powershell.exe -NoProfile -ExecutionPolicy Bypass -File install.ps1
+PostInstallCmd=<None>
+AdminQuietInstCmd=powershell.exe -NoProfile -ExecutionPolicy Bypass -File install.ps1
+UserQuietInstCmd=powershell.exe -NoProfile -ExecutionPolicy Bypass -File install.ps1
+SourceFiles=SourceFiles
+[SourceFiles]
+SourceFiles0=$workDir
+[SourceFiles0]
+%FILE0%=
+%FILE1%=
+%FILE2%=
+%FILE3%=
+%FILE4%=
+%FILE5%=
+%FILE6%=
+[Strings]
+FILE0=install.ps1
+FILE1=codex-$target.exe
+FILE2=codex-app-server-$target.exe
+FILE3=codex-command-runner-$target.exe
+FILE4=codex-responses-api-proxy-$target.exe
+FILE5=codex-windows-sandbox-setup-$target.exe
+FILE6=fcode-tray-$target.exe
+"@
+          Set-Content -LiteralPath $installerSed -Value $installerSedContent -Encoding ASCII
+
+          $uninstallRunner = @'
+          $ErrorActionPreference = "Stop"
+          $installRoot = Join-Path $env:LOCALAPPDATA "FCode"
+          $binDir = Join-Path $installRoot "bin"
+          $uninstallScript = Join-Path $binDir "uninstall-fcode.ps1"
+
+          if (Test-Path -LiteralPath $uninstallScript) {
+            & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $uninstallScript
+            exit $LASTEXITCODE
+          }
+
+          $pathValue = [Environment]::GetEnvironmentVariable("Path", "User")
+          if (-not [string]::IsNullOrWhiteSpace($pathValue)) {
+            $entries = $pathValue.Split(';', [System.StringSplitOptions]::RemoveEmptyEntries) | ForEach-Object { $_.Trim() }
+            $newEntries = $entries | Where-Object { $_ -and ($_ -ne $binDir) }
+            [Environment]::SetEnvironmentVariable("Path", ($newEntries -join ';'), "User")
+          }
+
+          if (Test-Path -LiteralPath $installRoot) {
+            Remove-Item -LiteralPath $installRoot -Recurse -Force
+          }
+          '@
+          Set-Content -LiteralPath (Join-Path $workDir "uninstall-runner.ps1") -Value $uninstallRunner -Encoding UTF8
+
+          $uninstallerSed = Join-Path $workDir "fcode-uninstaller.sed"
+          $uninstallerExe = Join-Path $distDir "fcode-uninstall-$target.exe"
+          $uninstallerSedContent = @"
+[Version]
+Class=IEXPRESS
+SEDVersion=3
+[Options]
+PackagePurpose=InstallApp
+ShowInstallProgramWindow=0
+HideExtractAnimation=1
+UseLongFileName=1
+InsideCompressed=0
+CAB_FixedSize=0
+CAB_ResvCodeSigning=0
+RebootMode=N
+InstallPrompt=
+DisplayLicense=
+FinishMessage=
+TargetName=$uninstallerExe
+FriendlyName=FCode Uninstaller ($target)
+AppLaunched=powershell.exe -NoProfile -ExecutionPolicy Bypass -File uninstall-runner.ps1
+PostInstallCmd=<None>
+AdminQuietInstCmd=powershell.exe -NoProfile -ExecutionPolicy Bypass -File uninstall-runner.ps1
+UserQuietInstCmd=powershell.exe -NoProfile -ExecutionPolicy Bypass -File uninstall-runner.ps1
+SourceFiles=SourceFiles
+[SourceFiles]
+SourceFiles0=$workDir
+[SourceFiles0]
+%FILE0%=
+[Strings]
+FILE0=uninstall-runner.ps1
+"@
+          Set-Content -LiteralPath $uninstallerSed -Value $uninstallerSedContent -Encoding ASCII
+
+          $iexpress = Join-Path $env:SystemRoot "System32\iexpress.exe"
+          & $iexpress /N /Q $installerSed
+          if ($LASTEXITCODE -ne 0) {
+            throw "IExpress failed to build installer"
+          }
+          & $iexpress /N /Q $uninstallerSed
+          if ($LASTEXITCODE -ne 0) {
+            throw "IExpress failed to build uninstaller"
+          }
+
       - name: Build Python runtime wheel
         shell: bash
         run: |
