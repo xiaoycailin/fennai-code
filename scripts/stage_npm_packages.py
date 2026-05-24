@@ -16,6 +16,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 BUILD_SCRIPT = REPO_ROOT / "codex-cli" / "scripts" / "build_npm_package.py"
 INSTALL_NATIVE_DEPS = REPO_ROOT / "codex-cli" / "scripts" / "install_native_deps.py"
+STAGE_FCODE_ASSETS = REPO_ROOT / "scripts" / "stage_fcode_packaging_assets.py"
 WORKFLOW_NAME = ".github/workflows/rust-release.yml"
 GITHUB_REPO = "openai/codex"
 
@@ -27,6 +28,15 @@ _SPEC.loader.exec_module(_BUILD_MODULE)
 PACKAGE_NATIVE_COMPONENTS = getattr(_BUILD_MODULE, "PACKAGE_NATIVE_COMPONENTS", {})
 PACKAGE_EXPANSIONS = getattr(_BUILD_MODULE, "PACKAGE_EXPANSIONS", {})
 CODEX_PLATFORM_PACKAGES = getattr(_BUILD_MODULE, "CODEX_PLATFORM_PACKAGES", {})
+INSTALLABLE_NATIVE_COMPONENTS = {
+    "bwrap",
+    "codex",
+    "codex-responses-api-proxy",
+    "codex-windows-sandbox-setup",
+    "codex-command-runner",
+    "fcode-tray",
+    "rg",
+}
 
 
 def parse_args() -> argparse.Namespace:
@@ -76,6 +86,19 @@ def collect_native_components(packages: list[str]) -> set[str]:
     for package in packages:
         components.update(PACKAGE_NATIVE_COMPONENTS.get(package, []))
     return components
+
+
+def installable_native_components(components: set[str]) -> set[str]:
+    return {component for component in components if component in INSTALLABLE_NATIVE_COMPONENTS}
+
+
+def stage_packaging_assets(vendor_src: Path, components: set[str]) -> None:
+    if "web-ui-v2" not in components and "fcode-tray" not in components:
+        return
+
+    cmd = [str(STAGE_FCODE_ASSETS), "--vendor-src", str(vendor_src)]
+    cmd.append("--build-web-ui-if-missing")
+    run_command(cmd)
 
 
 def expand_packages(packages: list[str]) -> list[str]:
@@ -158,7 +181,9 @@ def main() -> int:
     packages = expand_packages(list(args.packages))
     native_components = collect_native_components(packages)
     allow_missing_native_components = set(args.allow_missing_native_components)
-    native_components_to_install = native_components - allow_missing_native_components
+    native_components_to_install = (
+        installable_native_components(native_components) - allow_missing_native_components
+    )
 
     vendor_temp_root: Path | None = None
     vendor_src: Path | None = None
@@ -174,6 +199,7 @@ def main() -> int:
             vendor_temp_root = Path(tempfile.mkdtemp(prefix="npm-native-", dir=runner_temp))
             install_native_components(workflow_url, native_components_to_install, vendor_temp_root)
             vendor_src = vendor_temp_root / "vendor"
+            stage_packaging_assets(vendor_src, native_components)
 
         if resolved_head_sha:
             print(f"should `git checkout {resolved_head_sha}`")

@@ -41,7 +41,9 @@ use codex_utils_cli::ProfileV2Name;
 use codex_utils_cli::resume_hint;
 use owo_colors::OwoColorize;
 use std::io::IsTerminal;
+use std::net::TcpStream;
 use std::path::PathBuf;
+use std::process::Command;
 use supports_color::Stream;
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]
@@ -84,20 +86,21 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::user_input::UserInput;
 use codex_terminal_detection::TerminalName;
 
-/// Codex CLI
+/// Fennai CLI
 ///
 /// If no subcommand is specified, options will be forwarded to the interactive CLI.
 #[derive(Debug, Parser)]
 #[clap(
+    name = "fcode-cli",
     author,
     version,
     // If a sub‑command is given, ignore requirements of the default args.
     subcommand_negates_reqs = true,
     // The executable is sometimes invoked via a platform‑specific name like
-    // `codex-x86_64-unknown-linux-musl`, but the help output should always use
-    // the generic `codex` command name that users run.
-    bin_name = "codex",
-    override_usage = "codex [OPTIONS] [PROMPT]\n       codex [OPTIONS] <COMMAND> [ARGS]"
+    // `fcode-x86_64-unknown-linux-musl`, but the help output should always use
+    // the generic `fcode` command name that users run.
+    bin_name = "fcode",
+    override_usage = "fcode [OPTIONS] [PROMPT]\n       fcode [OPTIONS] <COMMAND> [ARGS]"
 )]
 struct MultitoolCli {
     #[clap(flatten)]
@@ -118,7 +121,27 @@ struct MultitoolCli {
 
 #[derive(Debug, clap::Subcommand)]
 enum Subcommand {
-    /// Run Codex non-interactively.
+    /// Start local FCode services via tray manager (idempotent).
+    Start(LocalStartCommand),
+
+    /// Restart local FCode services via tray manager.
+    Restart(LocalRestartCommand),
+
+    /// Stop local FCode services managed by tray manager.
+    Stop,
+
+    /// Show local FCode tray/app-server/web-ui status.
+    Status(LocalStatusCommand),
+
+    /// Handle an fcode:// deep link.
+    #[clap(name = "open-url")]
+    OpenUrl(OpenUrlCommand),
+
+    /// Register fcode:// URL scheme for this binary.
+    #[clap(name = "register-url-scheme")]
+    RegisterUrlScheme,
+
+    /// Run Fennai non-interactively.
     #[clap(visible_alias = "e")]
     Exec(ExecCli),
 
@@ -131,13 +154,13 @@ enum Subcommand {
     /// Remove stored authentication credentials.
     Logout(LogoutCommand),
 
-    /// Manage external MCP servers for Codex.
+    /// Manage external MCP servers for Fennai.
     Mcp(McpCli),
 
-    /// Manage Codex plugins.
+    /// Manage Fennai plugins.
     Plugin(PluginCli),
 
-    /// Start Codex as an MCP server (stdio).
+    /// Start Fennai as an MCP server (stdio).
     McpServer(McpServerCommand),
 
     /// [experimental] Run the app server or related tooling.
@@ -146,20 +169,20 @@ enum Subcommand {
     /// [experimental] Manage the app-server daemon with remote control enabled.
     RemoteControl(RemoteControlCommand),
 
-    /// Launch the Codex desktop app (opens the app installer if missing).
+    /// Launch the Fennai desktop app (opens the app installer if missing).
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     App(app_cmd::AppCommand),
 
     /// Generate shell completion scripts.
     Completion(CompletionCommand),
 
-    /// Update Codex to the latest version.
+    /// Update Fennai to the latest version.
     Update,
 
-    /// Diagnose local Codex installation, config, auth, and runtime health.
+    /// Diagnose local Fennai installation, config, auth, and runtime health.
     Doctor(DoctorCommand),
 
-    /// Run commands within a Codex-provided sandbox.
+    /// Run commands within a Fennai-provided sandbox.
     Sandbox(SandboxArgs),
 
     /// Debugging tools.
@@ -169,7 +192,7 @@ enum Subcommand {
     #[clap(hide = true)]
     Execpolicy(ExecpolicyCommand),
 
-    /// Apply the latest diff produced by Codex agent as a `git apply` to your local working tree.
+    /// Apply the latest diff produced by Fennai agent as a `git apply` to your local working tree.
     #[clap(visible_alias = "a")]
     Apply(ApplyCommand),
 
@@ -179,7 +202,7 @@ enum Subcommand {
     /// Fork a previous interactive session (picker by default; use --last to fork the most recent).
     Fork(ForkCommand),
 
-    /// [EXPERIMENTAL] Browse tasks from Codex Cloud and apply changes locally.
+    /// [EXPERIMENTAL] Browse tasks from Fennai Cloud and apply changes locally.
     #[clap(name = "cloud", alias = "cloud-tasks")]
     Cloud(CloudTasksCli),
 
@@ -203,6 +226,62 @@ struct CompletionCommand {
     /// Shell to generate completions for
     #[clap(value_enum, default_value_t = Shell::Bash)]
     shell: Shell,
+}
+
+#[derive(Debug, Parser, Clone)]
+struct LocalStartCommand {
+    /// Web UI port.
+    #[arg(short = 'p', long = "port", alias = "p", default_value_t = 25845)]
+    port: u16,
+
+    /// App-server WS port.
+    #[arg(long = "ws", default_value_t = 7070)]
+    ws: u16,
+
+    /// Wait until both app-server and web-ui are reachable.
+    #[arg(long = "wait", default_value_t = false)]
+    wait: bool,
+
+    /// Max wait time in milliseconds when --wait is set.
+    #[arg(long = "timeout-ms", default_value_t = 15000)]
+    timeout_ms: u64,
+}
+
+#[derive(Debug, Parser, Clone)]
+struct LocalRestartCommand {
+    /// Web UI port.
+    #[arg(short = 'p', long = "port", alias = "p", default_value_t = 25845)]
+    port: u16,
+
+    /// App-server WS port.
+    #[arg(long = "ws", default_value_t = 7070)]
+    ws: u16,
+
+    /// Wait until both app-server and web-ui are reachable.
+    #[arg(long = "wait", default_value_t = false)]
+    wait: bool,
+
+    /// Max wait time in milliseconds when --wait is set.
+    #[arg(long = "timeout-ms", default_value_t = 15000)]
+    timeout_ms: u64,
+}
+
+#[derive(Debug, Parser, Clone)]
+struct LocalStatusCommand {
+    /// Web UI port.
+    #[arg(short = 'p', long = "port", alias = "p", default_value_t = 25845)]
+    port: u16,
+
+    /// App-server WS port.
+    #[arg(long = "ws", default_value_t = 7070)]
+    ws: u16,
+}
+
+#[derive(Debug, Parser, Clone)]
+struct OpenUrlCommand {
+    /// fcode:// URL to handle.
+    #[arg(value_name = "URL")]
+    url: String,
 }
 
 #[derive(Debug, Parser)]
@@ -269,7 +348,7 @@ struct DebugModelsCommand {
 
 #[derive(Debug, Parser)]
 struct ReviewCommand {
-    /// Error out when config.toml contains fields that are not recognized by this version of Codex.
+    /// Error out when config.toml contains fields that are not recognized by this version of Fennai.
     #[arg(long = "strict-config", default_value_t = false)]
     strict_config: bool,
 
@@ -279,7 +358,7 @@ struct ReviewCommand {
 
 #[derive(Debug, Parser)]
 struct McpServerCommand {
-    /// Error out when config.toml contains fields that are not recognized by this version of Codex.
+    /// Error out when config.toml contains fields that are not recognized by this version of Fennai.
     #[arg(long = "strict-config", default_value_t = false)]
     strict_config: bool,
 }
@@ -437,7 +516,7 @@ struct AppServerCommand {
     #[command(subcommand)]
     subcommand: Option<AppServerSubcommand>,
 
-    /// Error out when config.toml contains fields that are not recognized by this version of Codex.
+    /// Error out when config.toml contains fields that are not recognized by this version of Fennai.
     #[arg(long = "strict-config", default_value_t = false)]
     strict_config: bool,
 
@@ -625,7 +704,9 @@ fn format_exit_messages(exit_info: AppExitInfo, color_enabled: bool) -> Vec<Stri
         lines.push(token_usage.to_string());
     }
 
-    if let Some(resume_cmd) = resume_hint(thread_name.as_deref(), conversation_id) {
+    if let Some(resume_cmd) = resume_hint(thread_name.as_deref(), conversation_id)
+        .map(|hint| hint.replace("codex resume", "fcode resume"))
+    {
         let command = if color_enabled {
             resume_cmd.cyan().to_string()
         } else {
@@ -662,7 +743,7 @@ fn handle_app_exit(exit_info: AppExitInfo) -> anyhow::Result<()> {
 fn run_update_action(action: UpdateAction) -> anyhow::Result<()> {
     println!();
     let cmd_str = action.command_str();
-    println!("Updating Codex via `{cmd_str}`...");
+    println!("Updating Fennai via `{cmd_str}`...");
 
     let status = {
         #[cfg(windows)]
@@ -697,7 +778,7 @@ fn run_update_action(action: UpdateAction) -> anyhow::Result<()> {
     if !status.success() {
         anyhow::bail!("`{cmd_str}` failed with status {status}");
     }
-    println!("\n🎉 Update ran successfully! Please restart Codex.");
+    println!("\n🎉 Update ran successfully! Please restart Fennai.");
     Ok(())
 }
 
@@ -705,7 +786,7 @@ fn run_update_command() -> anyhow::Result<()> {
     #[cfg(debug_assertions)]
     {
         anyhow::bail!(
-            "`codex update` is not available in debug builds. Install a release build of Codex to use this command."
+            "`fcode update` is not available in debug builds. Install a release build of Fennai to use this command."
         );
     }
 
@@ -713,7 +794,7 @@ fn run_update_command() -> anyhow::Result<()> {
     {
         let Some(action) = codex_tui::get_update_action() else {
             anyhow::bail!(
-                "Could not detect the Codex installation method. Please update manually: https://developers.openai.com/codex/cli/"
+                "Could not detect the Fennai installation method. Please update manually: https://developers.openai.com/fennai-code/cli/"
             );
         };
         run_update_action(action)
@@ -855,6 +936,50 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
             )
             .await?;
             handle_app_exit(exit_info)?;
+        }
+        Some(Subcommand::Start(command)) => {
+            reject_remote_mode_for_subcommand(
+                root_remote.as_deref(),
+                root_remote_auth_token_env.as_deref(),
+                "start",
+            )?;
+            run_local_tray_start(command)?;
+        }
+        Some(Subcommand::Restart(command)) => {
+            reject_remote_mode_for_subcommand(
+                root_remote.as_deref(),
+                root_remote_auth_token_env.as_deref(),
+                "restart",
+            )?;
+            run_local_tray_stop()?;
+            run_local_tray_start(LocalStartCommand {
+                port: command.port,
+                ws: command.ws,
+                wait: command.wait,
+                timeout_ms: command.timeout_ms,
+            })?;
+        }
+        Some(Subcommand::Stop) => {
+            reject_remote_mode_for_subcommand(
+                root_remote.as_deref(),
+                root_remote_auth_token_env.as_deref(),
+                "stop",
+            )?;
+            run_local_tray_stop()?;
+        }
+        Some(Subcommand::Status(command)) => {
+            reject_remote_mode_for_subcommand(
+                root_remote.as_deref(),
+                root_remote_auth_token_env.as_deref(),
+                "status",
+            )?;
+            run_local_tray_status(command.port, command.ws)?;
+        }
+        Some(Subcommand::OpenUrl(command)) => {
+            handle_fcode_url(&command.url)?;
+        }
+        Some(Subcommand::RegisterUrlScheme) => {
+            register_fcode_url_scheme()?;
         }
         Some(Subcommand::Exec(mut exec_cli)) => {
             reject_remote_mode_for_subcommand(
@@ -1471,7 +1596,7 @@ fn profile_v2_for_subcommand<'a>(
             subcommand: DebugSubcommand::PromptInput(_),
         }) => Ok(Some(profile_v2)),
         _ => anyhow::bail!(
-            "--profile-v2 only applies to runtime commands: `codex`, `codex exec`, `codex review`, `codex resume`, `codex fork`, and `codex debug prompt-input`."
+            "--profile-v2 only applies to runtime commands: `fcode`, `fcode exec`, `fcode review`, `fcode resume`, `fcode fork`, and `fcode debug prompt-input`."
         ),
     }
 }
@@ -1485,7 +1610,7 @@ async fn run_exec_server_command(
     let codex_self_exe = arg0_paths
         .codex_self_exe
         .clone()
-        .ok_or_else(|| anyhow::anyhow!("Codex executable path is not configured"))?;
+        .ok_or_else(|| anyhow::anyhow!("Fennai executable path is not configured"))?;
     let runtime_paths = codex_exec_server::ExecServerRuntimePaths::new(
         codex_self_exe,
         arg0_paths.codex_linux_sandbox_exe.clone(),
@@ -1876,6 +2001,12 @@ fn unsupported_subcommand_name_for_strict_config(
         Some(Subcommand::RemoteControl(remote_control)) => Some(remote_control.subcommand_name()),
         Some(Subcommand::Mcp(_)) => Some("mcp"),
         Some(Subcommand::Plugin(_)) => Some("plugin"),
+        Some(Subcommand::Start(_)) => Some("start"),
+        Some(Subcommand::Restart(_)) => Some("restart"),
+        Some(Subcommand::Stop) => Some("stop"),
+        Some(Subcommand::Status(_)) => Some("status"),
+        Some(Subcommand::OpenUrl(_)) => Some("open-url"),
+        Some(Subcommand::RegisterUrlScheme) => Some("register-url-scheme"),
         #[cfg(any(target_os = "macos", target_os = "windows"))]
         Some(Subcommand::App(_)) => Some("app"),
         Some(Subcommand::Login(_)) => Some("login"),
@@ -1892,6 +2023,366 @@ fn unsupported_subcommand_name_for_strict_config(
         Some(Subcommand::ExecServer(_)) => Some("exec-server"),
         Some(Subcommand::Features(_)) => Some("features"),
     }
+}
+
+fn handle_fcode_url(url: &str) -> anyhow::Result<()> {
+    let normalized = url.trim();
+    if !normalized.starts_with("fcode://") {
+        anyhow::bail!("expected fcode:// URL, got: {normalized}");
+    }
+
+    let body = normalized.trim_start_matches("fcode://");
+    let route = body.split(['?', '#']).next().unwrap_or_default();
+    match route {
+        "" | "open" | "start" => run_local_tray_start(LocalStartCommand {
+            port: 25845,
+            ws: 7070,
+            wait: true,
+            timeout_ms: 15000,
+        }),
+        "status" => run_local_tray_status(25845, 7070),
+        other => {
+            println!("fcode:// route accepted for future desktop handling: {other}");
+            Ok(())
+        }
+    }
+}
+
+#[cfg(windows)]
+fn register_fcode_url_scheme() -> anyhow::Result<()> {
+    let exe = std::env::current_exe()?;
+    let command = format!("\"{}\" open-url \"%1\"", exe.display());
+    let status = Command::new("reg")
+        .args([
+            "add",
+            r"HKCU\Software\Classes\fcode",
+            "/ve",
+            "/d",
+            "URL:FCode Protocol",
+            "/f",
+        ])
+        .status()?;
+    if !status.success() {
+        anyhow::bail!("failed to register fcode protocol root, status: {status}");
+    }
+
+    for args in [
+        vec![
+            "add",
+            r"HKCU\Software\Classes\fcode",
+            "/v",
+            "URL Protocol",
+            "/d",
+            "",
+            "/f",
+        ],
+        vec![
+            "add",
+            r"HKCU\Software\Classes\fcode\shell\open\command",
+            "/ve",
+            "/d",
+            command.as_str(),
+            "/f",
+        ],
+    ] {
+        let status = Command::new("reg").args(args).status()?;
+        if !status.success() {
+            anyhow::bail!("failed to register fcode URL scheme, status: {status}");
+        }
+    }
+
+    println!("Registered fcode:// URL scheme.");
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn register_fcode_url_scheme() -> anyhow::Result<()> {
+    anyhow::bail!("register-url-scheme is currently supported on Windows only")
+}
+
+#[cfg(windows)]
+fn run_local_tray_start(command: LocalStartCommand) -> anyhow::Result<()> {
+    if is_process_running("fcode-server.exe")? {
+        println!("FCode tray already running. Skip.");
+        run_local_tray_status(command.port, command.ws)?;
+        return Ok(());
+    }
+
+    let tray_path = resolve_tray_exe_path()?;
+    let launch_args = format!("--port {} --ws-port {}", command.port, command.ws);
+    Command::new("cmd")
+        .args([
+            "/C",
+            "start",
+            "",
+            tray_path.to_string_lossy().as_ref(),
+            launch_args.as_str(),
+        ])
+        .status()
+        .map_err(anyhow::Error::from)
+        .and_then(|status| {
+            if status.success() {
+                Ok(())
+            } else {
+                anyhow::bail!("failed to start fcode tray, status: {status}")
+            }
+        })?;
+
+    println!("FCode tray started.");
+    if command.wait {
+        wait_for_ports(command.port, command.ws, command.timeout_ms)?;
+    }
+    run_local_tray_status(command.port, command.ws)?;
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn run_local_tray_start(command: LocalStartCommand) -> anyhow::Result<()> {
+    run_app_server_daemon_command("start")?;
+    if command.wait {
+        wait_for_unix_app_server(command.ws, command.timeout_ms)?;
+    }
+    run_local_tray_status(command.port, command.ws)
+}
+
+#[cfg(windows)]
+fn run_local_tray_stop() -> anyhow::Result<()> {
+    if !is_process_running("fcode-server.exe")? {
+        println!("FCode tray is not running. Skip.");
+        return Ok(());
+    }
+
+    let status = Command::new("taskkill")
+        .args(["/IM", "fcode-server.exe", "/T", "/F"])
+        .status()?;
+    if !status.success() {
+        anyhow::bail!("failed to stop fcode tray, status: {status}");
+    }
+    println!("FCode tray stopped.");
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn run_local_tray_stop() -> anyhow::Result<()> {
+    run_app_server_daemon_command("stop")?;
+    Ok(())
+}
+
+#[cfg(windows)]
+fn run_local_tray_status(web_port: u16, ws_port: u16) -> anyhow::Result<()> {
+    let tray = is_process_running("fcode-server.exe")?;
+    let app_server = is_tcp_open(&format!("127.0.0.1:{ws_port}"));
+    let web_ui = is_tcp_open(&format!("127.0.0.1:{web_port}"));
+    println!(
+        "tray: {} | app-server(ws:{}): {} | web-ui-v2({}): {}",
+        if tray { "UP" } else { "DOWN" },
+        ws_port,
+        if app_server { "UP" } else { "DOWN" },
+        web_port,
+        if web_ui { "UP" } else { "DOWN" }
+    );
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn run_local_tray_status(web_port: u16, ws_port: u16) -> anyhow::Result<()> {
+    let app_server = is_tcp_open(&format!("127.0.0.1:{ws_port}"));
+    let web_ui = is_tcp_open(&format!("127.0.0.1:{web_port}"));
+    println!(
+        "tray: N/A | app-server(ws:{}): {} | web-ui-v2({}): {}",
+        ws_port,
+        if app_server { "UP" } else { "DOWN" },
+        web_port,
+        if web_ui { "UP" } else { "DOWN" }
+    );
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn wait_for_unix_app_server(ws_port: u16, timeout_ms: u64) -> anyhow::Result<()> {
+    let start = std::time::Instant::now();
+    let timeout = std::time::Duration::from_millis(timeout_ms);
+    let ws_addr = format!("127.0.0.1:{ws_port}");
+    while start.elapsed() < timeout {
+        if is_tcp_open(&ws_addr) {
+            return Ok(());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(250));
+    }
+    anyhow::bail!(
+        "timeout waiting for app-server ws port: {} ({} ms)",
+        ws_port,
+        timeout_ms
+    )
+}
+
+#[cfg(not(windows))]
+fn run_app_server_daemon_command(command: &str) -> anyhow::Result<()> {
+    let exe = std::env::current_exe()?;
+    let output = Command::new(exe)
+        .args(["app-server", "daemon", command])
+        .output()?;
+    if !output.status.success() {
+        anyhow::bail!(
+            "fcode app-server daemon {command} failed with status {}",
+            output.status
+        );
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    if !stdout.trim().is_empty() {
+        println!("{}", stdout.trim());
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn resolve_tray_exe_path() -> anyhow::Result<PathBuf> {
+    if let Ok(value) = std::env::var("FCODE_TRAY_PATH") {
+        let path = PathBuf::from(value);
+        if path.exists() {
+            return Ok(path);
+        }
+    }
+
+    let exe = std::env::current_exe()?;
+    let exe_dir = exe.parent().unwrap_or(std::path::Path::new("."));
+
+    // 1) Same folder as fcode binary.
+    let sibling = exe_dir.join("fcode-server.exe");
+    if sibling.is_file() {
+        return Ok(sibling);
+    }
+
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    let current_dir = std::env::current_dir()?;
+
+    // 2) Common dev layout from current directory.
+    candidates.push(
+        current_dir
+            .join("codex-rs")
+            .join("web-ui")
+            .join("fcode-server")
+            .join("bin")
+            .join("Release")
+            .join("fcode-server.exe"),
+    );
+    candidates.push(
+        current_dir
+            .join("codex-rs")
+            .join("web-ui")
+            .join("fcode-server")
+            .join("bin")
+            .join("Debug")
+            .join("fcode-server.exe"),
+    );
+    candidates.push(
+        current_dir
+            .join("web-ui")
+            .join("fcode-server")
+            .join("bin")
+            .join("Release")
+            .join("fcode-server.exe"),
+    );
+    candidates.push(
+        current_dir
+            .join("web-ui")
+            .join("fcode-server")
+            .join("bin")
+            .join("Debug")
+            .join("fcode-server.exe"),
+    );
+
+    // 3) Walk upward from fcode.exe path, handle target/debug and installed layouts.
+    for base in exe_dir.ancestors().take(8) {
+        candidates.push(base.join("fcode-server.exe"));
+        candidates.push(
+            base.join("web-ui")
+                .join("fcode-server")
+                .join("bin")
+                .join("Release")
+                .join("fcode-server.exe"),
+        );
+        candidates.push(
+            base.join("web-ui")
+                .join("fcode-server")
+                .join("bin")
+                .join("Debug")
+                .join("fcode-server.exe"),
+        );
+        candidates.push(
+            base.join("codex-rs")
+                .join("web-ui")
+                .join("fcode-server")
+                .join("bin")
+                .join("Release")
+                .join("fcode-server.exe"),
+        );
+        candidates.push(
+            base.join("codex-rs")
+                .join("web-ui")
+                .join("fcode-server")
+                .join("bin")
+                .join("Debug")
+                .join("fcode-server.exe"),
+        );
+    }
+
+    for candidate in candidates {
+        if candidate.is_file() {
+            return Ok(candidate);
+        }
+    }
+
+    anyhow::bail!(
+        "fcode-server.exe not found. Set FCODE_TRAY_PATH, or place it next to fcode binary, or keep standard web-ui/fcode-server/bin/{{Release|Debug}} layout"
+    );
+}
+
+#[cfg(windows)]
+fn is_process_running(image_name: &str) -> anyhow::Result<bool> {
+    let output = Command::new("tasklist")
+        .args([
+            "/FI",
+            &format!("IMAGENAME eq {image_name}"),
+            "/FO",
+            "CSV",
+            "/NH",
+        ])
+        .output()?;
+    if !output.status.success() {
+        anyhow::bail!("tasklist failed with status {}", output.status);
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    Ok(stdout
+        .lines()
+        .any(|line| !line.trim().is_empty() && !line.contains("No tasks are running")))
+}
+
+fn is_tcp_open(addr: &str) -> bool {
+    TcpStream::connect(addr).is_ok()
+}
+
+#[cfg(windows)]
+fn wait_for_ports(web_port: u16, ws_port: u16, timeout_ms: u64) -> anyhow::Result<()> {
+    let start = std::time::Instant::now();
+    let timeout = std::time::Duration::from_millis(timeout_ms);
+    let web_addr = format!("127.0.0.1:{web_port}");
+    let ws_addr = format!("127.0.0.1:{ws_port}");
+
+    while start.elapsed() < timeout {
+        if is_tcp_open(&web_addr) && is_tcp_open(&ws_addr) {
+            return Ok(());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(250));
+    }
+
+    anyhow::bail!(
+        "timeout waiting for ports: web-ui={} ws={} ({} ms)",
+        web_port,
+        ws_port,
+        timeout_ms
+    )
 }
 
 fn reject_strict_config_for_app_server_subcommand(
@@ -2095,7 +2586,7 @@ fn confirm(prompt: &str) -> std::io::Result<bool> {
     Ok(answer.eq_ignore_ascii_case("y") || answer.eq_ignore_ascii_case("yes"))
 }
 
-/// Build the final `TuiCli` for a `codex resume` invocation.
+/// Build the final `TuiCli` for a `fcode resume` invocation.
 fn finalize_resume_interactive(
     mut interactive: TuiCli,
     root_config_overrides: CliConfigOverrides,
@@ -2149,7 +2640,7 @@ fn finalize_fork_interactive(
     interactive
 }
 
-/// Merge flags provided to `codex resume`/`codex fork` so they take precedence over any
+/// Merge flags provided to `fcode resume`/`codex fork` so they take precedence over any
 /// root-level flags. Only overrides fields explicitly set on the subcommand-scoped
 /// CLI. Also appends `-c key=value` overrides with highest precedence.
 fn merge_interactive_cli_flags(interactive: &mut TuiCli, subcommand_cli: TuiCli) {
@@ -2643,7 +3134,7 @@ mod tests {
             lines,
             vec![
                 "Token usage: total=2 input=0 output=2".to_string(),
-                "To continue this session, run codex resume 123e4567-e89b-12d3-a456-426614174000"
+                "To continue this session, run fcode resume 123e4567-e89b-12d3-a456-426614174000"
                     .to_string(),
             ]
         );
@@ -2671,7 +3162,7 @@ mod tests {
             lines,
             vec![
                 "Token usage: total=2 input=0 output=2".to_string(),
-                "To continue this session, run codex resume, then select my-thread (123e4567-e89b-12d3-a456-426614174000)".to_string(),
+                "To continue this session, run fcode resume, then select my-thread (123e4567-e89b-12d3-a456-426614174000)".to_string(),
             ]
         );
     }
@@ -2679,7 +3170,7 @@ mod tests {
     #[test]
     fn resume_model_flag_applies_when_no_root_flags() {
         let interactive =
-            finalize_resume_from_args(["codex", "resume", "-m", "gpt-5.1-test"].as_ref());
+            finalize_resume_from_args(["fcode", "resume", "-m", "gpt-5.1-test"].as_ref());
 
         assert_eq!(interactive.model.as_deref(), Some("gpt-5.1-test"));
         assert!(interactive.resume_picker);

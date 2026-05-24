@@ -1157,6 +1157,11 @@ jobs:
         if: ${{ env.SIGN_MACOS == 'true' }}
         run: pnpm install --frozen-lockfile
 
+      - name: Build web-ui-v2 standalone bundle for npm packaging
+        if: ${{ env.SIGN_MACOS == 'true' }}
+        run: |
+          python3 ./scripts/build_fcode_web_ui_v2_bundle.py
+
       # stage_npm_packages.py requires DotSlash when staging releases.
       - uses: facebook/install-dotslash@1e4e7b3e07eaca387acb98f1d4720e0bee8dbb6a # v2
       - name: Stage npm packages
@@ -1164,6 +1169,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_VERSION: ${{ steps.release_name.outputs.name }}
+          FCODE_WEB_UI_V2_BUNDLE_DIR: ${{ github.workspace }}/codex-rs/web-ui-v2/.dist-fcode-web-ui-v2
         run: |
           workflow_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
           ./scripts/stage_npm_packages.py \

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Stage and optionally package the @openai/codex npm module."""
+"""Stage and optionally package the fennai-code npm module."""
 
 import argparse
 import json
@@ -14,48 +14,48 @@ CODEX_CLI_ROOT = SCRIPT_DIR.parent
 REPO_ROOT = CODEX_CLI_ROOT.parent
 RESPONSES_API_PROXY_NPM_ROOT = REPO_ROOT / "codex-rs" / "responses-api-proxy" / "npm"
 CODEX_SDK_ROOT = REPO_ROOT / "sdk" / "typescript"
-CODEX_NPM_NAME = "@openai/codex"
+CODEX_NPM_NAME = "fennai-code"
 
 # `npm_name` is the local optional-dependency alias consumed by `bin/codex.js`.
-# The underlying package published to npm is always `@openai/codex`.
+# The underlying package published to npm is `fennai-code`.
 CODEX_PLATFORM_PACKAGES: dict[str, dict[str, str]] = {
     "codex-linux-x64": {
-        "npm_name": "@openai/codex-linux-x64",
+        "npm_name": "fennai-code-linux-x64",
         "npm_tag": "linux-x64",
         "target_triple": "x86_64-unknown-linux-musl",
         "os": "linux",
         "cpu": "x64",
     },
     "codex-linux-arm64": {
-        "npm_name": "@openai/codex-linux-arm64",
+        "npm_name": "fennai-code-linux-arm64",
         "npm_tag": "linux-arm64",
         "target_triple": "aarch64-unknown-linux-musl",
         "os": "linux",
         "cpu": "arm64",
     },
     "codex-darwin-x64": {
-        "npm_name": "@openai/codex-darwin-x64",
+        "npm_name": "fennai-code-darwin-x64",
         "npm_tag": "darwin-x64",
         "target_triple": "x86_64-apple-darwin",
         "os": "darwin",
         "cpu": "x64",
     },
     "codex-darwin-arm64": {
-        "npm_name": "@openai/codex-darwin-arm64",
+        "npm_name": "fennai-code-darwin-arm64",
         "npm_tag": "darwin-arm64",
         "target_triple": "aarch64-apple-darwin",
         "os": "darwin",
         "cpu": "arm64",
     },
     "codex-win32-x64": {
-        "npm_name": "@openai/codex-win32-x64",
+        "npm_name": "fennai-code-win32-x64",
         "npm_tag": "win32-x64",
         "target_triple": "x86_64-pc-windows-msvc",
         "os": "win32",
         "cpu": "x64",
     },
     "codex-win32-arm64": {
-        "npm_name": "@openai/codex-win32-arm64",
+        "npm_name": "fennai-code-win32-arm64",
         "npm_tag": "win32-arm64",
         "target_triple": "aarch64-pc-windows-msvc",
         "os": "win32",
@@ -69,12 +69,26 @@ PACKAGE_EXPANSIONS: dict[str, list[str]] = {
 
 PACKAGE_NATIVE_COMPONENTS: dict[str, list[str]] = {
     "codex": [],
-    "codex-linux-x64": ["bwrap", "codex", "rg"],
-    "codex-linux-arm64": ["bwrap", "codex", "rg"],
-    "codex-darwin-x64": ["codex", "rg"],
-    "codex-darwin-arm64": ["codex", "rg"],
-    "codex-win32-x64": ["codex", "rg", "codex-windows-sandbox-setup", "codex-command-runner"],
-    "codex-win32-arm64": ["codex", "rg", "codex-windows-sandbox-setup", "codex-command-runner"],
+    "codex-linux-x64": ["bwrap", "codex", "rg", "web-ui-v2"],
+    "codex-linux-arm64": ["bwrap", "codex", "rg", "web-ui-v2"],
+    "codex-darwin-x64": ["codex", "rg", "web-ui-v2"],
+    "codex-darwin-arm64": ["codex", "rg", "web-ui-v2"],
+    "codex-win32-x64": [
+        "codex",
+        "rg",
+        "codex-windows-sandbox-setup",
+        "codex-command-runner",
+        "web-ui-v2",
+        "fcode-tray",
+    ],
+    "codex-win32-arm64": [
+        "codex",
+        "rg",
+        "codex-windows-sandbox-setup",
+        "codex-command-runner",
+        "web-ui-v2",
+        "fcode-tray",
+    ],
     "codex-responses-api-proxy": ["codex-responses-api-proxy"],
     "codex-sdk": [],
 }
@@ -88,11 +102,13 @@ PACKAGE_CHOICES = tuple(PACKAGE_NATIVE_COMPONENTS)
 
 COMPONENT_DEST_DIR: dict[str, str] = {
     "bwrap": "codex-resources",
-    "codex": "codex",
+    "codex": "fcode",
     "codex-responses-api-proxy": "codex-responses-api-proxy",
-    "codex-windows-sandbox-setup": "codex",
-    "codex-command-runner": "codex",
+    "codex-windows-sandbox-setup": "fcode",
+    "codex-command-runner": "fcode",
     "rg": "path",
+    "web-ui-v2": "web-ui-v2",
+    "fcode-tray": "fcode-tray",
 }
 
 
@@ -437,8 +453,9 @@ def run_npm_pack(staging_dir: Path, output_path: Path) -> Path:
 
     with tempfile.TemporaryDirectory(prefix="codex-npm-pack-") as pack_dir_str:
         pack_dir = Path(pack_dir_str)
+        npm_executable = "npm.cmd" if sys.platform == "win32" else "npm"
         stdout = subprocess.check_output(
-            ["npm", "pack", "--json", "--pack-destination", str(pack_dir)],
+            [npm_executable, "pack", "--json", "--pack-destination", str(pack_dir)],
             cwd=staging_dir,
             text=True,
         )

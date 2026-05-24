@@ -53,8 +53,8 @@ BINARY_COMPONENTS = {
     ),
     "codex": BinaryComponent(
         artifact_prefix="codex",
-        dest_dir="codex",
-        binary_basename="codex",
+        dest_dir="fcode",
+        binary_basename="fcode",
     ),
     "codex-responses-api-proxy": BinaryComponent(
         artifact_prefix="codex-responses-api-proxy",
@@ -63,14 +63,20 @@ BINARY_COMPONENTS = {
     ),
     "codex-windows-sandbox-setup": BinaryComponent(
         artifact_prefix="codex-windows-sandbox-setup",
-        dest_dir="codex",
+        dest_dir="fcode",
         binary_basename="codex-windows-sandbox-setup",
         targets=WINDOWS_TARGETS,
     ),
     "codex-command-runner": BinaryComponent(
         artifact_prefix="codex-command-runner",
-        dest_dir="codex",
+        dest_dir="fcode",
         binary_basename="codex-command-runner",
+        targets=WINDOWS_TARGETS,
+    ),
+    "fcode-tray": BinaryComponent(
+        artifact_prefix="fcode-tray",
+        dest_dir="fcode-tray",
+        binary_basename="fcode-server",
         targets=WINDOWS_TARGETS,
     ),
 }

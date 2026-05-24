@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Unified entry point for the Codex CLI.
+// Unified entry point for the Fennai CLI.
 
 import { spawn } from "node:child_process";
 import { existsSync, realpathSync } from "fs";
@@ -13,12 +13,12 @@ const __dirname = path.dirname(__filename);
 const require = createRequire(import.meta.url);
 
 const PLATFORM_PACKAGE_BY_TARGET = {
-  "x86_64-unknown-linux-musl": "@openai/codex-linux-x64",
-  "aarch64-unknown-linux-musl": "@openai/codex-linux-arm64",
-  "x86_64-apple-darwin": "@openai/codex-darwin-x64",
-  "aarch64-apple-darwin": "@openai/codex-darwin-arm64",
-  "x86_64-pc-windows-msvc": "@openai/codex-win32-x64",
-  "aarch64-pc-windows-msvc": "@openai/codex-win32-arm64",
+  "x86_64-unknown-linux-musl": "fennai-code-linux-x64",
+  "aarch64-unknown-linux-musl": "fennai-code-linux-arm64",
+  "x86_64-apple-darwin": "fennai-code-darwin-x64",
+  "aarch64-apple-darwin": "fennai-code-darwin-arm64",
+  "x86_64-pc-windows-msvc": "fennai-code-win32-x64",
+  "aarch64-pc-windows-msvc": "fennai-code-win32-arm64",
 };
 
 const { platform, arch } = process;
@@ -75,13 +75,13 @@ if (!platformPackage) {
   throw new Error(`Unsupported target triple: ${targetTriple}`);
 }
 
-const codexBinaryName = process.platform === "win32" ? "codex.exe" : "codex";
+const fcodeBinaryName = process.platform === "win32" ? "fcode.exe" : "fcode";
 const localVendorRoot = path.join(__dirname, "..", "vendor");
 const localBinaryPath = path.join(
   localVendorRoot,
   targetTriple,
-  "codex",
-  codexBinaryName,
+  "fcode",
+  fcodeBinaryName,
 );
 
 let vendorRoot;
@@ -95,10 +95,10 @@ try {
     const packageManager = detectPackageManager();
     const updateCommand =
       packageManager === "bun"
-        ? "bun install -g @openai/codex@latest"
-        : "npm install -g @openai/codex@latest";
+        ? "bun install -g fennai-code@latest"
+        : "npm install -g fennai-code@latest";
     throw new Error(
-      `Missing optional dependency ${platformPackage}. Reinstall Codex: ${updateCommand}`,
+      `Missing optional dependency ${platformPackage}. Reinstall Fennai Code: ${updateCommand}`,
     );
   }
 }
@@ -107,15 +107,15 @@ if (!vendorRoot) {
   const packageManager = detectPackageManager();
   const updateCommand =
     packageManager === "bun"
-      ? "bun install -g @openai/codex@latest"
-      : "npm install -g @openai/codex@latest";
+      ? "bun install -g fennai-code@latest"
+      : "npm install -g fennai-code@latest";
   throw new Error(
-    `Missing optional dependency ${platformPackage}. Reinstall Codex: ${updateCommand}`,
+    `Missing optional dependency ${platformPackage}. Reinstall Fennai Code: ${updateCommand}`,
   );
 }
 
 const archRoot = path.join(vendorRoot, targetTriple);
-const binaryPath = path.join(archRoot, "codex", codexBinaryName);
+const binaryPath = path.join(archRoot, "fcode", fcodeBinaryName);
 
 // Use an asynchronous spawn instead of spawnSync so that Node is able to
 // respond to signals (e.g. Ctrl-C / SIGINT) while the native binary is
@@ -172,6 +172,19 @@ const packageManagerEnvVar =
     : "CODEX_MANAGED_BY_NPM";
 env[packageManagerEnvVar] = "1";
 env.CODEX_MANAGED_PACKAGE_ROOT = realpathSync(path.join(__dirname, ".."));
+const bundledWebUiPath = path.join(archRoot, "web-ui-v2");
+if (existsSync(bundledWebUiPath)) {
+  env.FCODE_WEB_UI_V2_PATH = bundledWebUiPath;
+}
+const bundledTrayPath = path.join(
+  archRoot,
+  "fcode-tray",
+  process.platform === "win32" ? "fcode-server.exe" : "fcode-server",
+);
+if (existsSync(bundledTrayPath)) {
+  env.FCODE_TRAY_PATH = bundledTrayPath;
+}
+env.FCODE_BIN_PATH = binaryPath;
 
 const child = spawn(binaryPath, process.argv.slice(2), {
   stdio: "inherit",

@@ -220,6 +220,26 @@ jobs:
               "$dest/${binary}-${{ matrix.target }}.exe"
           done
 
+      - name: Build and stage FCode tray binary
+        shell: powershell
+        run: |
+          $traySrc = Join-Path $env:GITHUB_WORKSPACE "codex-rs\web-ui\fcode-server\Program.cs"
+          $iconPath = Join-Path $env:GITHUB_WORKSPACE "codex-rs\web-ui\fcode-server\fcode-icon.ico"
+          $trayOutDir = Join-Path $env:GITHUB_WORKSPACE "codex-rs\dist\${{ matrix.target }}"
+          New-Item -ItemType Directory -Path $trayOutDir -Force | Out-Null
+          $trayOut = Join-Path $trayOutDir "fcode-tray-${{ matrix.target }}.exe"
+
+          & "C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe" `
+            /nologo /target:winexe /optimize+ `
+            /win32icon:$iconPath `
+            /out:$trayOut `
+            /reference:System.dll /reference:System.Core.dll /reference:System.Drawing.dll /reference:System.Windows.Forms.dll `
+            $traySrc
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "Failed to build tray binary"
+          }
+
       - name: Build Python runtime wheel
         shell: bash
         run: |
